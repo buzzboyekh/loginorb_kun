@@ -1,0 +1,7 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+last-run.log
+last-test-haptic.log
+.DS_Store
