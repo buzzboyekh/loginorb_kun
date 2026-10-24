@@ -5,6 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('orb', {
   getState: () => ipcRenderer.invoke('get-state'),
   onState: (cb) => { ipcRenderer.on('state', (_e, s) => cb(s)); },
+  onEvent: (cb) => { ipcRenderer.on('event', (_e, ev) => cb(ev)); },   // 專注結束、休息結束
   nextPalette: () => ipcRenderer.send('next-palette'),
   dragStart: () => ipcRenderer.send('drag-start'),
   dragMove: (dx, dy) => ipcRenderer.send('drag-move', { dx, dy }),

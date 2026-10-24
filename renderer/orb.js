@@ -26,11 +26,27 @@
     const listen = qs.get('listen') === '1';      // ?listen=1 開麥克風
     const sensitivity = qs.get('sens') || 'M';
     const listeners = [];
-    const snapshot = () => ({ paletteIndex: idx, listen, sensitivity });
+    const eventListeners = [];
+    // 預覽專注狀態：?focus=25（分鐘）&elapsed=10（已過幾分鐘）&drift=1（分心）&phase=break
+    let fakeFocus = null;
+    const fm = Number(qs.get('focus'));
+    if (fm > 0) {
+      const total = fm * 60000, elapsed = Math.min(total, (Number(qs.get('elapsed')) || 0) * 60000);
+      const now = Date.now();
+      fakeFocus = {
+        phase: qs.get('phase') === 'break' ? 'break' : qs.get('phase') === 'paused' ? 'paused' : 'focus',
+        startedAt: now - elapsed, endsAt: now + total - elapsed, total, remaining: total - elapsed,
+        drift: qs.get('drift') === '1', driftApp: qs.get('drift') === '1' ? 'LINE' : '', sessionsToday: 0,
+      };
+    }
+    const snapshot = () => ({ paletteIndex: idx, listen, sensitivity, focus: fakeFocus });
     const emit = () => listeners.forEach((f) => f(snapshot()));
+    // 預覽用：window.__orbEvent('focus-done') 可以手動觸發結束動畫
+    window.__orbEvent = (name) => eventListeners.forEach((f) => f({ name }));
     return {
       getState: () => Promise.resolve(snapshot()),
       onState: (f) => listeners.push(f),
+      onEvent: (f) => eventListeners.push(f),
       nextPalette: () => { idx = (idx + 1) % PALETTES.length; emit(); },
       dragStart() {}, dragMove() {}, setIgnore() {}, contextMenu() {},
       // 瀏覽器預覽時記錄震動指令，方便檢查節奏
@@ -144,6 +160,7 @@
     if (!s) return;
     if (s.sensitivity) sensitivity = s.sensitivity;
     if (s.listen !== undefined) setListening(!!s.listen);
+    if (s.focus !== undefined) applyFocus(s.focus);
     if (s.paletteIndex === undefined) return;
     const pal = PALETTES[((s.paletteIndex % PALETTES.length) + PALETTES.length) % PALETTES.length];
     tgt = pal.colors.map(hex);
@@ -224,6 +241,109 @@
   let lastSeg = 0;
   // 長按分四段：輕慢 → 輕快 → 中 → 中快 [震動等級, 間隔秒]；最重的只留給爆破那一下
   const HOLD_SEGMENTS = [['h1', 0.22], ['h1', 0.15], ['h2', 0.13], ['h2', 0.085]];
+
+  // ---------- 專注（lock-in）----------
+  // 主程序告訴我們這段專注從幾點到幾點，進度自己算。專注時小球呼吸放慢、光暈收緊、
+  // 外圈多一環點陣進度環（點陣球的語彙來自 thinking-orbs：Thinking / Searching / Solving）。
+  // 玩具互動（點、按、甩、拖）在任何狀態都照常，專注只是改變小球的「情緒」。
+  const RING_DOTS = 60;          // 進度環的點數（每點 = 1/60 段）
+  const fo = { phase: 'idle', startedAt: 0, endsAt: 0, total: 0, remaining: 0, drift: false };
+  let calm = 0;                  // 0..1：專注的平靜程度（專注中慢慢升到 1）
+  let dim = 0;                   // 0..1：分心時變暗、變灰
+  let ringA = 0;                 // 0..1：進度環的可見度
+  let restA = 0;                 // 0..1：休息中的淡色呼吸
+  let doneT = -100;              // 專注完成的時間（結束儀式：進度環收攏、金光一閃、再爆）
+  let pauseBlink = 0;
+
+  function applyFocus(f) {
+    if (!f) { Object.assign(fo, { phase: 'idle', startedAt: 0, endsAt: 0, total: 0, remaining: 0, drift: false }); return; }
+    Object.assign(fo, {
+      phase: f.phase || 'idle', startedAt: f.startedAt || 0, endsAt: f.endsAt || 0,
+      total: f.total || 0, remaining: f.remaining || 0, drift: !!f.drift,
+    });
+  }
+
+  // 0..1 的進度（暫停時凍結）
+  function focusProgress() {
+    if (!fo.total) return 0;
+    if (fo.phase === 'paused') return clamp(1 - fo.remaining / fo.total, 0, 1);
+    return clamp((Date.now() - fo.startedAt) / fo.total, 0, 1);
+  }
+
+  function onEvent(ev) {
+    if (!ev) return;
+    if (ev.name === 'focus-done') {
+      doneT = t;
+      // 結束儀式：先讓點陣環「解出來」，1.1 秒後泡泡爆開、換新顏色（等於自己獎勵自己）
+      setTimeout(() => { if (popPhase === 0) triggerPop(1); }, 1100);
+    } else if (ev.name === 'break-done') {
+      pulses.push({ t0: t, x: 0, y: 0, s: 0.6 });
+      energy = Math.max(energy, 0.6);
+    }
+  }
+
+  function stepFocus(dt) {
+    const focusing = fo.phase === 'focus' || fo.phase === 'paused';
+    calm += ((focusing ? 1 : 0) - calm) * damp(focusing ? 0.35 : 1.2, dt);   // 慢慢靜下來，結束時比較快回來
+    dim += ((focusing && fo.drift ? 1 : 0) - dim) * damp(1.6, dt);
+    ringA += ((focusing || fo.phase === 'break' ? 1 : 0) - ringA) * damp(2.2, dt);
+    restA += ((fo.phase === 'break' ? 1 : 0) - restA) * damp(1.2, dt);
+    pauseBlink = fo.phase === 'paused' ? 0.5 + 0.5 * Math.sin(t * 2.4) : 0;
+  }
+
+  // 點陣進度環：畫在光暈上、球體外。走過的點亮，領頭的點像掃描線一樣閃；休息時整圈淡淡呼吸。
+  function drawFocusRing(c, glow) {
+    if (ringA < 0.01) return;
+    const prog = focusProgress();
+    const done = t - doneT;                                       // 結束儀式進行到哪
+    const solving = done >= 0 && done < 1.2 ? done / 1.2 : -1;
+    const rr = R * (1.12 + 0.02 * Math.sin(t * 0.6) + 0.06 * restA + (solving >= 0 ? -0.08 * smooth(0, 1, solving) : 0));
+    const ink = mixc(glow, WHITE, 0.72);
+    const dr = 1.25 * U;
+    c.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < RING_DOTS; i++) {
+      const q = i / RING_DOTS;
+      const a0 = -Math.PI / 2 + q * TAU;                           // 從 12 點鐘開始順時針
+      // 每個點有一點點 z 深度感：前面大、後面小（像在看一顆斜斜的點陣球的赤道）
+      const depth = 0.5 + 0.5 * Math.sin(a0 + t * 0.12);
+      let alpha, rad = dr * (0.75 + 0.45 * depth);
+      if (fo.phase === 'break') {
+        alpha = (0.14 + 0.1 * Math.sin(t * 1.1 + q * TAU * 2)) * restA;
+      } else if (solving >= 0) {
+        // 解出來：全圈依序點亮，再一起亮到最白
+        const wave = smooth(q - 0.08, q + 0.02, solving * 1.1);
+        alpha = 0.18 + 0.6 * wave + 0.3 * smooth(0.8, 1, solving);
+        rad *= 1 + 0.5 * wave;
+      } else {
+        const lit = q < prog ? 1 : 0;
+        const lead = Math.exp(-(((q - prog) * RING_DOTS) ** 2) / 2.5);   // 領頭點附近的光
+        const tw = 0.85 + 0.15 * Math.sin(t * 1.7 + i * 0.9);
+        alpha = lit ? (0.62 * tw) : 0.13;
+        alpha += 0.6 * lead * (0.6 + 0.4 * Math.sin(t * 5));
+        if (fo.phase === 'paused') alpha *= 0.55 + 0.45 * pauseBlink;
+        rad *= 1 + 0.6 * lead;
+      }
+      alpha *= ringA * (1 - 0.55 * dim);
+      if (alpha < 0.01) continue;
+      const x = Math.cos(a0) * rr, y = Math.sin(a0) * rr;
+      c.fillStyle = rgba(ink, Math.min(1, alpha * 0.25));
+      c.beginPath(); c.arc(x, y, rad * 2.6, 0, TAU); c.fill();
+      c.fillStyle = rgba(ink, Math.min(1, alpha));
+      c.beginPath(); c.arc(x, y, rad, 0, TAU); c.fill();
+    }
+    // 結束儀式的金光：一圈暖光從環往外散
+    if (solving >= 0) {
+      const e = 1 - Math.pow(1 - solving, 2);
+      const r0 = rr * (1 + 0.5 * e), w = R * 0.25;
+      const g = c.createRadialGradient(0, 0, Math.max(0, r0 - w), 0, 0, r0 + w);
+      g.addColorStop(0, rgba(ink, 0));
+      g.addColorStop(0.5, rgba(ink, 0.35 * (1 - solving)));
+      g.addColorStop(1, rgba(ink, 0));
+      c.fillStyle = g;
+      c.fillRect(-(r0 + w), -(r0 + w), (r0 + w) * 2, (r0 + w) * 2);
+    }
+    c.globalCompositeOperation = 'source-over';
+  }
 
   // ---------- 聽周圍的聲音（只在本機算音量，不錄音、不存檔、不上傳） ----------
   // 音量 → 亮度、光暈、光絲速度、外形顫動；頻段 → 6 個色塊；音節開頭 → 從邊緣送出一圈聲波
@@ -794,9 +914,12 @@
     f.globalCompositeOperation = 'source-over';
   }
 
+  const GRAY = [118, 120, 134];
   function render() {
-    const glow = glowColor();
-    const sBase = 1 + 0.022 * Math.sin(t * 1.2) + 0.012 * energy * Math.sin(t * 4.6) + 0.03 * hover + 0.02 * energy + 0.045 * aud.level;
+    let glow = glowColor();
+    if (dim > 0.01) glow = mixc(glow, GRAY, 0.5 * dim);          // 分心：顏色退掉一半
+    // 呼吸：專注時放慢、變淺（breath 的節奏在 frame() 裡隨 calm 調整）
+    const sBase = 1 + (0.022 - 0.008 * calm) * Math.sin(breath) + 0.012 * energy * Math.sin(t * 4.6) + 0.03 * hover + 0.02 * energy + 0.045 * aud.level;
     // 準備爆：預兆（劇烈顫抖、鼓起來）→ 屏息（停住、往內縮一點，像吸一口氣）
     let armSwell = 1, armShake = 0;
     if (popPhase === 3) {
@@ -837,7 +960,7 @@
       b.setTransform(DPR, 0, 0, DPR, (W / 2) * DPR, (H / 2) * DPR);
       deform(b, sBody, shx, shy);
 
-      const thin = (1 - 0.35 * ts) * (1 - 0.3 * fresh); // 快破時、剛重生時：膜比較薄、比較透
+      const thin = (1 - 0.35 * ts) * (1 - 0.3 * fresh) * (1 - 0.22 * dim); // 快破時、剛重生時：膜比較薄、比較透；分心時也淡一點
       const base = b.createRadialGradient(-R * 0.15, -R * 0.25, 0, 0, 0, R);
       base.addColorStop(0, rgba(mixc(glow, WHITE, 0.35), 0.86 * thin));
       base.addColorStop(0.6, rgba(mixc(glow, INK, 0.24), 0.8 * thin));
@@ -852,7 +975,8 @@
         o.y = noise3(i * 3.7, 9.1, tw) * R * 1.5 + o.oy;
         const br = R * (0.7 + 0.3 * noise3(i * 3.7, 17.3, tw * 1.3)) * (1 + 0.32 * aud.bands[i]); // 對應頻段越響越大
         const g = b.createRadialGradient(o.x, o.y, 0, o.x, o.y, br);
-        const bc = fresh > 0.01 ? mixc(curV[i], WHITE, 0.35 * fresh) : curV[i]; // 新泡泡：同色系的淡色
+        let bc = fresh > 0.01 ? mixc(curV[i], WHITE, 0.35 * fresh) : curV[i]; // 新泡泡：同色系的淡色
+        if (dim > 0.01) bc = mixc(bc, GRAY, 0.45 * dim);                     // 分心：色塊退成灰
         const ba = 1 - 0.25 * fresh;
         g.addColorStop(0, rgba(bc, (0.72 + 0.22 * aud.bands[i]) * ba));
         g.addColorStop(0.4, rgba(bc, 0.4 * ba));
@@ -903,14 +1027,15 @@
       at(jx, jy);
       const hs = sBase * Math.min(bub, 1.15);
       ctx.scale(hs, hs);
-      const ga = (0.28 + 0.18 * energy + 0.08 * hover + 0.15 * ts + 0.22 * aud.level + (popPhase === 3 ? 0.25 : 0)) * Math.min(1, bub);
-      halo(ctx, 0, 0, R * 1.62, glow, ga);
+      const ga = (0.28 + 0.18 * energy + 0.08 * hover + 0.15 * ts + 0.22 * aud.level + (popPhase === 3 ? 0.25 : 0)) * Math.min(1, bub) * (1 - 0.4 * dim);
+      halo(ctx, 0, 0, R * (1.62 - 0.16 * calm), glow, ga);   // 專注時光暈收緊一點
       const c2 = mixc(curV[2], curV[4], 0.5 + 0.5 * Math.sin(t * 0.21)); // 緩慢游移的第二層光，帶一點虹彩
       halo(ctx, Math.cos(t * 0.23) * R * 0.16, Math.sin(t * 0.31) * R * 0.16, R * 1.4, c2, ga * 0.55);
     }
 
     at(jx, jy);
     ctx.scale(sBase, sBase);
+    if (showBody) drawFocusRing(ctx, glow);           // 專注進度環（在光暈上、球體下）
     for (const p of pulses) {
       const q = (t - p.t0) / 1.3, e = 1 - Math.pow(1 - q, 3);
       const rr = R * (0.95 + 0.5 * e), w = R * 0.34;
@@ -990,6 +1115,7 @@
 
   // ---------- 主迴圈 ----------
   let last = performance.now();
+  let breath = 0;               // 呼吸相位（節奏會隨專注改變，所以不用 t）
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
@@ -1003,7 +1129,9 @@
     energy += (eT - energy) * damp(eT > energy ? 6 : 1.2, dt);
     hover += ((hoverTarget && !dragging ? 1 : 0) - hover) * damp(7, dt);
     stepAudio(dt);
-    tw += dt * (0.13 + 0.6 * energy + 0.35 * aud.level);
+    stepFocus(dt);
+    breath += dt * (1.2 - 0.62 * calm);                                   // 專注時呼吸放慢（約 11 秒一輪）
+    tw += dt * (0.13 + 0.6 * energy + 0.35 * aud.level) * (1 - 0.45 * calm); // 色塊流得慢一點
     const mdec = Math.exp(-dt * 5);
     mvx *= mdec; mvy *= mdec;
 
@@ -1111,5 +1239,6 @@
   resize();
   api.getState().then(applyState);
   api.onState(applyState);
+  if (api.onEvent) api.onEvent(onEvent);
   requestAnimationFrame(frame);
 })();

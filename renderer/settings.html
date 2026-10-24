@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self' data:">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock-in Orb 設定</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="drag-strip" aria-hidden="true"></div>
+
+  <!-- 第一次打開：三步驟設定精靈 -->
+  <section id="setup" class="setup" hidden aria-labelledby="setup-title">
+    <ol class="steps" aria-label="設定進度">
+      <li data-step="1" class="on">看看小球</li>
+      <li data-step="2">權限</li>
+      <li data-step="3">專注與外觀</li>
+    </ol>
+
+    <div class="step" data-step="1">
+      <div class="orb-preview" aria-hidden="true"><iframe id="preview" title="小球預覽" tabindex="-1"></iframe></div>
+      <h1 id="setup-title">嗨，這是你的 Lock-in Orb</h1>
+      <p class="lead">它會一直浮在螢幕角落。想專注的時候，它幫你計時、陪你安靜；想發洩的時候，它是一顆可以戳、按、甩到爆的解壓球。</p>
+      <ul class="how">
+        <li><b>短按</b> 換顏色</li>
+        <li><b>按住</b> 蓄力，約 5 秒會爆</li>
+        <li><b>連點或用力甩</b> 像泡泡一樣破掉再長回來</li>
+        <li><b>右鍵</b> 或點選單列的圓圈 → 所有功能</li>
+      </ul>
+      <div class="actions">
+        <button type="button" class="primary" data-next>下一步</button>
+      </div>
+    </div>
+
+    <div class="step" data-step="2" hidden>
+      <h1>三個權限，都可以不給</h1>
+      <p class="lead">不給的話小球照常運作，只是少掉對應的功能。之後都能在設定裡改。</p>
+      <div class="perm">
+        <div class="perm-head">
+          <h2>觸控板震動</h2>
+          <span class="pill" data-haptic-pill>檢查中</span>
+        </div>
+        <p>只有 MacBook 內建的 Force Touch 觸控板會震。按下去試試看，有感覺到三下就是好了。</p>
+        <button type="button" data-haptic-test>試一下震動</button>
+      </div>
+      <div class="perm">
+        <div class="perm-head">
+          <h2>麥克風：跟著說話聲波動</h2>
+          <span class="pill" data-mic-pill>未詢問</span>
+        </div>
+        <p>只在本機算音量，不錄音、不存檔、不上傳。開著的時候選單列會有橘色的麥克風點。</p>
+        <div class="row">
+          <button type="button" data-mic-ask>允許麥克風</button>
+          <button type="button" class="ghost" data-mic-skip>先不要</button>
+        </div>
+      </div>
+      <div class="perm" data-drift-perm>
+        <div class="perm-head">
+          <h2>分心偵測：看前景是哪個 App</h2>
+          <span class="pill" data-drift-pill>專注時才會問</span>
+        </div>
+        <p>專注中每幾秒問一次 macOS「現在前面是哪個 App」。切到 LINE、Discord 這類 App 時小球會變暗變灰、輕輕震一下。第一次專注時 macOS 會跳出「允許控制 System Events」，按允許就好。只拿 App 名稱，不看內容。</p>
+        <label class="switch"><input type="checkbox" data-key="driftWatch"><span>專注時開啟分心偵測</span></label>
+      </div>
+      <div class="actions">
+        <button type="button" class="ghost" data-prev>上一步</button>
+        <button type="button" class="primary" data-next>下一步</button>
+      </div>
+    </div>
+
+    <div class="step" data-step="3" hidden>
+      <h1>專注多久、什麼顏色</h1>
+      <p class="lead">之後選單列的圓圈或 <kbd>⌥⌘L</kbd> 就能開始一段專注。</p>
+      <div class="field">
+        <span class="label">預設專注長度</span>
+        <div class="chips" role="radiogroup" aria-label="預設專注長度" data-focus-chips></div>
+      </div>
+      <div class="field">
+        <span class="label">色票（之後也能自動輪換）</span>
+        <div class="swatches" role="radiogroup" aria-label="色票" data-swatches="setup"></div>
+      </div>
+      <div class="actions">
+        <button type="button" class="ghost" data-prev>上一步</button>
+        <button type="button" class="primary" data-finish>完成，開始用</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 平常的設定 -->
+  <section id="panel" class="panel" hidden>
+    <nav class="nav" aria-label="設定分類">
+      <button type="button" data-go="focus" class="on">專注</button>
+      <button type="button" data-go="look">外觀</button>
+      <button type="button" data-go="touch">觸感</button>
+      <button type="button" data-go="sound">聲音</button>
+      <button type="button" data-go="system">系統</button>
+    </nav>
+
+    <main class="content">
+      <section class="sec" data-sec="focus" aria-labelledby="h-focus">
+        <h1 id="h-focus">專注</h1>
+        <div class="focus-card" data-focus-card>
+          <div class="focus-time" data-focus-time>準備好了</div>
+          <div class="focus-sub" data-focus-sub>選一個長度，小球會陪你安靜到結束。</div>
+          <div class="chips" role="radiogroup" aria-label="專注長度" data-focus-chips></div>
+          <div class="row" data-focus-actions>
+            <button type="button" class="primary" data-focus="start">開始專注</button>
+            <button type="button" data-focus="pause" hidden>暫停</button>
+            <button type="button" data-focus="resume" hidden>繼續</button>
+            <button type="button" class="ghost" data-focus="stop" hidden>結束</button>
+          </div>
+        </div>
+        <div class="field two">
+          <label>自訂長度（分鐘）<input type="number" min="1" max="240" data-key="focusMin" inputmode="numeric"></label>
+          <label>休息（分鐘，0 = 不休息）<input type="number" min="0" max="60" data-key="breakMin" inputmode="numeric"></label>
+        </div>
+        <label class="switch"><input type="checkbox" data-key="autoBreak"><span>專注結束後自動進入休息</span></label>
+        <label class="switch"><input type="checkbox" data-key="driftWatch"><span>專注時偵測分心（切到下面這些 App 會變暗）</span></label>
+        <p class="hint" data-drift-unsupported hidden>分心偵測目前只支援 macOS。</p>
+        <label class="field">算「分心」的 App（一行一個，照 App 的名稱）
+          <textarea rows="4" data-key="driftApps" spellcheck="false"></textarea>
+        </label>
+        <p class="hint">第一次專注時 macOS 會問「Lock-in Orb 想控制 System Events」。沒允許的話只是不會偵測，其他照常。<button type="button" class="link" data-open-automation>打開自動化權限設定</button></p>
+        <p class="hint">專注中小球不會自動換色、呼吸放慢、外圈的點陣環顯示進度。隨時都還是可以戳它、按它、甩它。</p>
+      </section>
+
+      <section class="sec" data-sec="look" hidden aria-labelledby="h-look">
+        <h1 id="h-look">外觀</h1>
+        <div class="field">
+          <span class="label">色票（《光與壑》莫內 4 季 × 4 時段）</span>
+          <div class="swatches" role="radiogroup" aria-label="色票" data-swatches="panel"></div>
+        </div>
+        <label class="switch"><input type="checkbox" data-key="auto"><span>自動變色（每 12 秒輪到下一組）</span></label>
+        <div class="field">
+          <span class="label">大小</span>
+          <div class="chips" role="radiogroup" aria-label="大小" data-size-chips></div>
+        </div>
+        <div class="field">
+          <span class="label">透明度</span>
+          <div class="chips" role="radiogroup" aria-label="透明度" data-opacity-chips></div>
+        </div>
+        <div class="row">
+          <button type="button" data-reset-position>移回右下角</button>
+          <button type="button" class="ghost" data-show-orb>小球不見了，叫出來</button>
+        </div>
+      </section>
+
+      <section class="sec" data-sec="touch" hidden aria-labelledby="h-touch">
+        <h1 id="h-touch">觸感</h1>
+        <label class="switch"><input type="checkbox" data-key="haptics"><span>觸控板震動</span></label>
+        <p class="hint">目前後端：<span data-haptic-backend>—</span>。分段強度要靠 python3 呼叫 MultitouchSupport；沒有的話退回系統內建的輕／重兩段，手指要碰著觸控板。</p>
+        <button type="button" data-haptic-test>試一下震動（播爆破的那段）</button>
+      </section>
+
+      <section class="sec" data-sec="sound" hidden aria-labelledby="h-sound">
+        <h1 id="h-sound">聲音</h1>
+        <label class="switch"><input type="checkbox" data-key="listen"><span>跟著周圍的說話聲波動</span></label>
+        <p class="hint">只在本機算音量和頻段，不錄音、不存檔、不上傳。麥克風權限：<span class="pill" data-mic-pill>—</span>
+          <button type="button" class="link" data-mic-ask>重新詢問</button>
+          <button type="button" class="link" data-open-mic>打開系統設定</button>
+        </p>
+        <div class="field">
+          <span class="label">靈敏度</span>
+          <div class="chips" role="radiogroup" aria-label="靈敏度" data-sens-chips></div>
+        </div>
+      </section>
+
+      <section class="sec" data-sec="system" hidden aria-labelledby="h-system">
+        <h1 id="h-system">系統</h1>
+        <label class="switch"><input type="checkbox" data-key="launchAtLogin"><span>登入時自動啟動</span></label>
+        <div class="field">
+          <span class="label">快捷鍵</span>
+          <table class="keys">
+            <tr><td><kbd data-key-toggle>⌥⌘O</kbd></td><td>顯示／隱藏小球</td></tr>
+            <tr><td><kbd data-key-focus>⌥⌘L</kbd></td><td>開始／結束專注</td></tr>
+          </table>
+        </div>
+        <p class="hint">版本 <span data-version>—</span>。點陣進度環的語彙參考 Jakub Antalik 的 thinking-orbs（MIT）。
+          <button type="button" class="link" data-url="https://github.com/graceclara/lockinorb">GitHub</button>
+          <button type="button" class="link" data-url="https://libraries.dev/orbs">thinking-orbs</button>
+        </p>
+        <button type="button" class="ghost" data-rerun-setup>再跑一次設定精靈</button>
+      </section>
+    </main>
+  </section>
+
+  <script src="palettes.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>
