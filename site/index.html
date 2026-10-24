@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock-in Orb</title>
+  <meta name="description" content="桌面常駐的解壓小球，也是陪你專注的燈。macOS 選單列小工具，開源。">
+  <style>
+    :root { --ink: #0c0e22; --ink-2: #141733; --ink-3: #1d2142; --line: rgba(255,255,255,.09); --text: #eceef8; --muted: #9aa0c2; --accent: #c9b8ff; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--ink); color: var(--text); }
+    body { font: 16px/1.65 -apple-system, "PingFang TC", "Noto Sans TC", "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+    header { padding: 72px 0 28px; text-align: center; }
+    .orb { width: 300px; height: 300px; margin: 0 auto; }
+    .orb iframe { width: 100%; height: 100%; border: 0; background: transparent; }
+    h1 { font-size: 40px; margin: 8px 0 6px; letter-spacing: .01em; }
+    .tag { color: var(--muted); font-size: 18px; margin: 0 0 22px; }
+    .cta { display: inline-flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    .btn { display: inline-block; min-height: 46px; line-height: 46px; padding: 0 20px; border-radius: 12px; background: var(--ink-3); border: 1px solid var(--line); color: var(--text); text-decoration: none; }
+    .btn.primary { background: var(--accent); color: var(--ink); font-weight: 600; border-color: transparent; }
+    .modes { display: flex; gap: 8px; justify-content: center; margin: 14px 0 0; }
+    .modes button { font: inherit; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 20px; min-height: 40px; padding: 0 16px; cursor: pointer; }
+    .modes button[aria-pressed="true"] { color: var(--ink); background: var(--accent); border-color: transparent; font-weight: 600; }
+    section { padding: 36px 0; border-top: 1px solid var(--line); }
+    h2 { font-size: 24px; margin: 0 0 14px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .card { background: var(--ink-2); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+    .card h3 { margin: 0 0 6px; font-size: 16px; }
+    .card p { margin: 0; color: var(--muted); font-size: 15px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    td:first-child { white-space: nowrap; font-weight: 600; width: 34%; }
+    ol { padding-left: 22px; } li { margin: 6px 0; }
+    pre { background: var(--ink-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; overflow: auto; font-size: 14px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    kbd { font: 13px ui-monospace, Menlo, monospace; background: var(--ink-3); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+    footer { padding: 30px 0 50px; color: var(--muted); font-size: 14px; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } h1 { font-size: 32px; } header { padding-top: 48px; } .orb { width: 240px; height: 240px; } }
+  </style>
+</head>
+<body>
+  <header class="wrap">
+    <div class="orb"><iframe id="orb" title="Lock-in Orb 即時預覽（可以點、按住、連點）" src="../renderer/index.html?p=6"></iframe></div>
+    <h1>Lock-in Orb</h1>
+    <p class="tag">桌面常駐的解壓小球，也是陪你專注的燈。</p>
+    <div class="modes" role="group" aria-label="預覽模式">
+      <button type="button" data-mode="toy" aria-pressed="true">玩具</button>
+      <button type="button" data-mode="focus">專注中</button>
+      <button type="button" data-mode="drift">分心了</button>
+      <button type="button" data-mode="break">休息</button>
+    </div>
+    <p class="tag" style="font-size:14px;margin-top:10px">上面那顆是活的：點一下換色，按住蓄力，連點會破。</p>
+    <div class="cta">
+      <a class="btn primary" href="#install">安裝（macOS）</a>
+      <a class="btn" href="https://github.com/graceclara/lockinorb">GitHub</a>
+    </div>
+  </header>
+
+  <section class="wrap" id="what">
+    <h2>兩種心情，一顆球</h2>
+    <div class="grid">
+      <div class="card"><h3>想發洩的時候</h3><p>短按換色、按住蓄力、連點或用力甩到極限就像泡泡一樣破掉再長回來。MacBook 觸控板會跟著分段震動。</p></div>
+      <div class="card"><h3>想專注的時候</h3><p>選單列按一下「開始專注 25 分鐘」。小球呼吸放慢、不再換色，外圈的點陣環顯示進度；切去 LINE 它會變灰提醒你；時間到自己爆開慶祝。</p></div>
+      <div class="card"><h3>顏色來自《光與壑》</h3><p>莫內四季 × 四個時段，16 組色票，同色系調和，不會變成彩虹。</p></div>
+      <div class="card"><h3>只在本機</h3><p>聽聲音模式只算音量，不錄音不上傳；分心偵測只拿前景 App 的名稱。沒有帳號、沒有網路請求。</p></div>
+    </div>
+  </section>
+
+  <section class="wrap" id="how">
+    <h2>操作</h2>
+    <table>
+      <tr><td>短按小球</td><td>換下一個顏色</td></tr>
+      <tr><td>按住</td><td>蓄力，震動分四段，約 5 秒會爆</td></tr>
+      <tr><td>連點／用力甩</td><td>泡泡越來越鼓，到極限破掉，1 秒後長出新的</td></tr>
+      <tr><td>拖曳</td><td>移動位置（會記住）</td></tr>
+      <tr><td>右鍵／選單列圓圈</td><td>專注、換色、色票、大小、透明度、設定</td></tr>
+      <tr><td><kbd>⌥⌘O</kbd></td><td>顯示／隱藏小球</td></tr>
+      <tr><td><kbd>⌥⌘L</kbd></td><td>開始／結束專注</td></tr>
+    </table>
+  </section>
+
+  <section class="wrap" id="install">
+    <h2>安裝</h2>
+    <p>目前是開源專案，還沒有簽名過的安裝檔。需要 macOS 與 Node.js 18 以上。</p>
+    <pre><code>git clone https://github.com/graceclara/lockinorb.git
+cd lockinorb
+npm install      # 會下載 Electron，約 100MB
+npm start</code></pre>
+    <ol>
+      <li>第一次打開會跳出設定精靈：試一下震動、決定要不要給麥克風、選專注長度和顏色。</li>
+      <li>小球出現在右下角，選單列多一個圓圈。Dock 不會有圖示。</li>
+      <li>想做成 App：<code>npm run pack</code>（Apple Silicon）或 <code>npm run pack:intel</code>，成品在 <code>dist/</code>，拖進「應用程式」。</li>
+      <li>想開機自動出現：設定 → 系統 → 登入時自動啟動。</li>
+    </ol>
+    <p style="color:var(--muted)">分心偵測第一次啟動時 macOS 會問「Lock-in Orb 想控制 System Events」，這是用來讀前景 App 名稱的；不允許也能正常用。</p>
+  </section>
+
+  <footer class="wrap">
+    MIT。點陣進度環的語彙參考 <a href="https://libraries.dev/orbs">thinking-orbs</a>（Jakub Antalik，MIT）。Kun 與 Grace 製作。
+  </footer>
+
+  <script>
+    (() => {
+      const orb = document.getElementById('orb');
+      const q = { toy: 'p=6', focus: 'p=6&focus=25&elapsed=9', drift: 'p=6&focus=25&elapsed=9&drift=1', break: 'p=6&focus=5&elapsed=1&phase=break' };
+      for (const b of document.querySelectorAll('[data-mode]')) {
+        b.addEventListener('click', () => {
+          document.querySelectorAll('[data-mode]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          orb.src = '../renderer/index.html?' + q[b.dataset.mode];
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

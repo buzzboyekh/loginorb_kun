@@ -40,9 +40,18 @@ const SIZE_LABELS = { S: '小', M: '中', L: '大' };
 const OPACITIES = [1, 0.8, 0.6, 0.4];
 const AUTO_INTERVAL_MS = 12000;                      // 自動變色間隔
 const SHORTCUT = 'CommandOrControl+Alt+O';           // 顯示 / 隱藏
+const FOCUS_SHORTCUT = 'CommandOrControl+Alt+L';     // 開始 / 結束專注
+const FOCUS_CHOICES = [15, 25, 45, 90];              // 選單裡的專注長度（分鐘）
+const DRIFT_POLL_MS = 4000;                          // 專注中多久看一次前景 App
+// 預設會算「分心」的 App（前景切到這些就把小球調暗）。使用者可以在設定裡改。
+const DEFAULT_DRIFT_APPS = ['LINE', 'Discord', 'Messages', '訊息', 'Telegram', 'Instagram', 'Threads', 'WhatsApp', 'TikTok'];
 
 const defaults = {
   paletteIndex: 0, auto: true, size: 'M', opacity: 1, x: null, y: null, haptics: true, listen: true, sensitivity: 'M',
+  // 專注（lock-in）
+  focusMin: 25, breakMin: 5, driftWatch: true, driftApps: DEFAULT_DRIFT_APPS, autoBreak: true,
+  // 第一次打開才會跑設定精靈
+  onboarded: false,
 };
 const SENSITIVITIES = [['L', '低（只對很明顯的聲音反應）'], ['M', '中'], ['H', '高（小聲也會動）']];
 let state = { ...defaults };
@@ -51,6 +60,7 @@ let tray = null;
 let autoTimer = null;
 let saveTimer = null;
 let dragOrigin = null;
+let settingsWin = null;
 
 // ---------- 設定存取 ----------
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
@@ -66,6 +76,18 @@ function loadState() {
   state.haptics = state.haptics !== false;
   state.listen = state.listen !== false;
   if (!SENSITIVITIES.some(([k]) => k === state.sensitivity)) state.sensitivity = 'M';
+  state.focusMin = clampInt(state.focusMin, 1, 240, defaults.focusMin);
+  state.breakMin = clampInt(state.breakMin, 0, 60, defaults.breakMin);
+  state.driftWatch = state.driftWatch !== false;
+  state.autoBreak = state.autoBreak !== false;
+  state.onboarded = state.onboarded === true;
+  if (!Array.isArray(state.driftApps)) state.driftApps = DEFAULT_DRIFT_APPS.slice();
+  state.driftApps = state.driftApps.map((s) => String(s).trim()).filter(Boolean).slice(0, 50);
+}
+
+function clampInt(v, lo, hi, fallback) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
 }
 
 function saveStateSoon() {
@@ -78,9 +100,23 @@ function saveStateSoon() {
   }, 400);
 }
 
+// 小球畫面拿到的狀態（含專注進度）
 const publicState = () => ({
   paletteIndex: state.paletteIndex, auto: state.auto, size: state.size, opacity: state.opacity,
   listen: state.listen, sensitivity: state.sensitivity,
+  focus: focusSnapshot(),
+});
+
+// 設定視窗拿到的完整設定（不含座標）
+const settingsSnapshot = () => ({
+  paletteIndex: state.paletteIndex, auto: state.auto, size: state.size, opacity: state.opacity,
+  haptics: state.haptics, hapticBackend: haptics && haptics.backend ? haptics.backend : (state.haptics ? 'unknown' : 'off'),
+  listen: state.listen, sensitivity: state.sensitivity, micStatus,
+  focusMin: state.focusMin, breakMin: state.breakMin, driftWatch: state.driftWatch, driftApps: state.driftApps,
+  autoBreak: state.autoBreak, onboarded: state.onboarded,
+  launchAtLogin: getLaunchAtLogin(), driftSupported: process.platform === 'darwin',
+  focus: focusSnapshot(), palettes: PALETTES, sizes: SIZE_LABELS, opacities: OPACITIES,
+  focusChoices: FOCUS_CHOICES, shortcuts: { toggle: '⌥⌘O', focus: '⌥⌘L' }, version: app.getVersion(),
 });
 
 // ---------- 位置 ----------
@@ -192,11 +228,18 @@ function toggleVisible() {
 // ---------- 顏色 ----------
 function broadcast() {
   if (win && !win.isDestroyed()) win.webContents.send('state', publicState());
+  if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send('settings', settingsSnapshot());
+}
+
+// 一次性的事件（專注結束、休息結束），小球畫面拿去放動畫
+function emitEvent(name, data) {
+  if (win && !win.isDestroyed()) win.webContents.send('event', { name, ...(data || {}) });
 }
 
 function restartAuto() {
   clearInterval(autoTimer);
   autoTimer = null;
+  if (focus.phase === 'focus' || focus.phase === 'paused') return; // 專注時不自動換色
   if (state.auto) autoTimer = setInterval(() => setPalette((state.paletteIndex + 1) % PALETTES.length, false), AUTO_INTERVAL_MS);
 }
 
@@ -262,7 +305,212 @@ function setSensitivity(k) {
   refreshTray();
 }
 
+// ---------- 專注（lock-in）----------
+// 一段專注 = 從 startedAt 到 endsAt。小球畫面只拿這兩個時間自己算進度，主程序不用每秒推。
+// phase：idle（沒在專注）｜focus｜paused｜break
+const focus = { phase: 'idle', startedAt: 0, endsAt: 0, total: 0, remaining: 0, drift: false, driftApp: '', sessionsToday: 0, dayKey: '' };
+let focusTimer = null;
+let driftTimer = null;
+let driftBusy = false;
+
+function focusSnapshot() {
+  return {
+    phase: focus.phase, startedAt: focus.startedAt, endsAt: focus.endsAt, total: focus.total,
+    remaining: focus.phase === 'paused' ? focus.remaining : Math.max(0, focus.endsAt - Date.now()),
+    drift: focus.drift, driftApp: focus.driftApp, sessionsToday: focus.sessionsToday,
+  };
+}
+
+function fmtRemaining(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function refreshTrayTitle() {
+  if (!tray || tray.isDestroyed() || typeof tray.setTitle !== 'function') return;
+  if (focus.phase === 'focus') tray.setTitle(fmtRemaining(focus.endsAt - Date.now()), { fontType: 'monospacedDigit' });
+  else if (focus.phase === 'paused') tray.setTitle(`⏸ ${fmtRemaining(focus.remaining)}`, { fontType: 'monospacedDigit' });
+  else if (focus.phase === 'break') tray.setTitle(`☕ ${fmtRemaining(focus.endsAt - Date.now())}`, { fontType: 'monospacedDigit' });
+  else tray.setTitle('');
+}
+
+function bumpSessionsToday() {
+  const key = new Date().toDateString();
+  if (focus.dayKey !== key) { focus.dayKey = key; focus.sessionsToday = 0; }
+  focus.sessionsToday += 1;
+}
+
+function startFocus(minutes) {
+  const min = clampInt(minutes, 1, 240, state.focusMin);
+  const now = Date.now();
+  Object.assign(focus, { phase: 'focus', startedAt: now, endsAt: now + min * 60000, total: min * 60000, remaining: 0, drift: false, driftApp: '' });
+  log('開始專注', `${min} 分鐘`);
+  if (state.auto) { clearInterval(autoTimer); autoTimer = null; } // 專注時顏色不自動換，畫面安靜一點
+  haptic('step');
+  startFocusTicker();
+  startDriftWatch();
+  afterFocusChange();
+}
+
+function pauseFocus() {
+  if (focus.phase !== 'focus') return;
+  focus.remaining = Math.max(0, focus.endsAt - Date.now());
+  focus.phase = 'paused';
+  focus.drift = false;
+  stopDriftWatch();
+  log('暫停專注', fmtRemaining(focus.remaining));
+  afterFocusChange();
+}
+
+function resumeFocus() {
+  if (focus.phase !== 'paused') return;
+  const now = Date.now();
+  focus.startedAt = now - (focus.total - focus.remaining);
+  focus.endsAt = now + focus.remaining;
+  focus.phase = 'focus';
+  startDriftWatch();
+  log('繼續專注');
+  afterFocusChange();
+}
+
+function stopFocus(reason) {
+  const was = focus.phase;
+  Object.assign(focus, { phase: 'idle', startedAt: 0, endsAt: 0, total: 0, remaining: 0, drift: false, driftApp: '' });
+  stopFocusTicker();
+  stopDriftWatch();
+  if (was !== 'idle') log('結束專注', reason || '');
+  restartAuto();
+  afterFocusChange();
+}
+
+function startBreak(minutes) {
+  const min = clampInt(minutes, 1, 60, state.breakMin);
+  const now = Date.now();
+  Object.assign(focus, { phase: 'break', startedAt: now, endsAt: now + min * 60000, total: min * 60000, remaining: 0, drift: false, driftApp: '' });
+  stopDriftWatch();
+  startFocusTicker();
+  log('開始休息', `${min} 分鐘`);
+  afterFocusChange();
+}
+
+// 每秒看一次有沒有到時間；畫面上的進度由 renderer 自己插值
+function startFocusTicker() {
+  stopFocusTicker();
+  focusTimer = setInterval(() => {
+    if (focus.phase === 'focus' && Date.now() >= focus.endsAt) {
+      bumpSessionsToday();
+      log('專注完成', `第 ${focus.sessionsToday} 段`);
+      emitEvent('focus-done', { sessionsToday: focus.sessionsToday });
+      if (state.autoBreak && state.breakMin > 0) startBreak(state.breakMin);
+      else stopFocus('完成');
+    } else if (focus.phase === 'break' && Date.now() >= focus.endsAt) {
+      emitEvent('break-done');
+      haptic('h2');
+      stopFocus('休息結束');
+    } else {
+      refreshTrayTitle();
+    }
+  }, 1000);
+}
+
+function stopFocusTicker() { clearInterval(focusTimer); focusTimer = null; }
+
+function afterFocusChange() {
+  broadcast();
+  refreshTray();
+  refreshTrayTitle();
+}
+
+function toggleFocus() {
+  if (focus.phase === 'idle') startFocus(state.focusMin);
+  else stopFocus('快捷鍵');
+}
+
+// 分心偵測：專注中每幾秒問一次 macOS 前景是哪個 App（System Events，第一次會跳「允許控制」的詢問）。
+// 只拿 App 名稱，不看視窗內容；其他平台不支援，直接略過。
+function startDriftWatch() {
+  stopDriftWatch();
+  if (process.platform !== 'darwin' || !state.driftWatch) return;
+  driftTimer = setInterval(pollFrontmost, DRIFT_POLL_MS);
+  pollFrontmost();
+}
+
+function stopDriftWatch() {
+  clearInterval(driftTimer); driftTimer = null;
+  if (focus.drift) { focus.drift = false; focus.driftApp = ''; }
+}
+
+function pollFrontmost() {
+  if (driftBusy || focus.phase !== 'focus') return;
+  driftBusy = true;
+  const { execFile } = require('child_process');
+  execFile('osascript', ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true'],
+    { timeout: 2500 }, (err, stdout) => {
+      driftBusy = false;
+      if (err) { if (!pollFrontmost.warned) { pollFrontmost.warned = true; log('分心偵測無法讀前景 App（可能沒給「自動化」權限）', err.message); } return; }
+      const name = String(stdout || '').trim();
+      const drift = !!name && state.driftApps.some((a) => a.toLowerCase() === name.toLowerCase());
+      if (drift !== focus.drift) {
+        focus.drift = drift;
+        focus.driftApp = drift ? name : '';
+        log(drift ? `分心：${name}` : '回到專注');
+        if (drift) haptic('h1');
+        broadcast();
+      }
+    });
+}
+
+function getLaunchAtLogin() {
+  try { return !!app.getLoginItemSettings().openAtLogin; } catch (_) { return false; }
+}
+
+function setLaunchAtLogin(on) {
+  try { app.setLoginItemSettings({ openAtLogin: !!on }); } catch (e) { log('設定開機啟動失敗', e); }
+}
+
+// ---------- 設定視窗（也是第一次打開的設定精靈） ----------
+function openSettings(section) {
+  if (settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.show(); settingsWin.focus();
+    if (section) settingsWin.webContents.send('go', section);
+    return;
+  }
+  settingsWin = new BrowserWindow({
+    width: 560, height: 680, minWidth: 420, minHeight: 520,
+    title: 'Lock-in Orb 設定', show: false, backgroundColor: '#0c0e22',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-settings.js'),
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
+    },
+  });
+  settingsWin.loadFile(path.join(__dirname, 'renderer', 'settings.html'), {
+    query: { section: section || (state.onboarded ? 'focus' : 'setup') },
+  });
+  settingsWin.once('ready-to-show', () => { settingsWin.show(); if (app.dock) app.dock.show(); });
+  settingsWin.on('closed', () => { settingsWin = null; if (app.dock) app.dock.hide(); });
+  settingsWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+}
+
 // ---------- 選單 ----------
+function focusMenu() {
+  const items = [];
+  if (focus.phase === 'idle') {
+    items.push(...FOCUS_CHOICES.map((m) => ({ label: `開始專注 ${m} 分鐘`, click: () => startFocus(m) })));
+    items.push({ label: '自訂長度…', click: () => openSettings('focus') });
+  } else {
+    if (focus.phase === 'focus') items.push({ label: `專注中  剩 ${fmtRemaining(focus.endsAt - Date.now())}`, enabled: false });
+    if (focus.phase === 'paused') items.push({ label: `已暫停  剩 ${fmtRemaining(focus.remaining)}`, enabled: false });
+    if (focus.phase === 'break') items.push({ label: `休息中  剩 ${fmtRemaining(focus.endsAt - Date.now())}`, enabled: false });
+    if (focus.phase === 'focus') items.push({ label: '暫停', click: pauseFocus });
+    if (focus.phase === 'paused') items.push({ label: '繼續', click: resumeFocus });
+    if (focus.phase === 'break') items.push({ label: '跳過休息，再來一段', click: () => startFocus(state.focusMin) });
+    items.push({ label: '結束', click: () => stopFocus('選單') });
+  }
+  return items;
+}
+
 function buildMenu() {
   const paletteMenu = SEASONS.map((season) => ({
     label: season.label,
@@ -278,6 +526,8 @@ function buildMenu() {
   }));
 
   return Menu.buildFromTemplate([
+    ...focusMenu(),
+    { type: 'separator' },
     { label: '換下一個顏色', click: () => setPalette((state.paletteIndex + 1) % PALETTES.length, true) },
     { label: '自動變色', type: 'checkbox', checked: state.auto, click: (item) => setAuto(item.checked) },
     {
@@ -315,6 +565,8 @@ function buildMenu() {
     { label: `${win && win.isVisible() ? '隱藏' : '顯示'}小球    ⌥⌘O`, click: toggleVisible },
     { label: '移回右下角', click: resetPosition },
     { type: 'separator' },
+    { label: '設定…', click: () => openSettings() },
+    { type: 'separator' },
     { label: '結束 Lock-in Orb', role: 'quit' },
   ]);
 }
@@ -347,6 +599,64 @@ ipcMain.on('context-menu', () => { if (win) buildMenu().popup({ window: win }); 
 ipcMain.on('haptic', (_e, kind) => haptic(String(kind)));
 ipcMain.handle('mic-request', () => requestMic());
 ipcMain.on('renderer-log', (_e, m) => log('[畫面]', String(m).slice(0, 500)));
+
+// ---------- IPC（來自設定視窗） ----------
+ipcMain.handle('settings:get', () => settingsSnapshot());
+ipcMain.handle('settings:set', (_e, patch) => {
+  if (!patch || typeof patch !== 'object') return settingsSnapshot();
+  for (const [k, v] of Object.entries(patch)) {
+    switch (k) {
+      case 'paletteIndex': if (Number.isInteger(v) && v >= 0 && v < PALETTES.length) setPalette(v, true); break;
+      case 'auto': setAuto(!!v); break;
+      case 'size': applySize(String(v)); break;
+      case 'opacity': if (OPACITIES.includes(Number(v))) applyOpacity(Number(v)); break;
+      case 'haptics': state.haptics = !!v; break;
+      case 'listen': setListen(!!v); break;
+      case 'sensitivity': if (SENSITIVITIES.some(([key]) => key === v)) setSensitivity(v); break;
+      case 'focusMin': state.focusMin = clampInt(v, 1, 240, state.focusMin); break;
+      case 'breakMin': state.breakMin = clampInt(v, 0, 60, state.breakMin); break;
+      case 'autoBreak': state.autoBreak = !!v; break;
+      case 'driftWatch':
+        state.driftWatch = !!v;
+        if (focus.phase === 'focus') startDriftWatch();
+        break;
+      case 'driftApps':
+        if (Array.isArray(v)) state.driftApps = v.map((s) => String(s).trim()).filter(Boolean).slice(0, 50);
+        break;
+      case 'launchAtLogin': setLaunchAtLogin(!!v); break;
+      case 'onboarded': state.onboarded = !!v; break;
+      default: log('設定視窗送來不認識的欄位', k);
+    }
+  }
+  saveStateSoon();
+  broadcast();
+  refreshTray();
+  return settingsSnapshot();
+});
+ipcMain.handle('settings:focus', (_e, cmd, arg) => {
+  switch (cmd) {
+    case 'start': startFocus(arg); break;
+    case 'pause': pauseFocus(); break;
+    case 'resume': resumeFocus(); break;
+    case 'stop': stopFocus('設定視窗'); break;
+    case 'break': startBreak(arg); break;
+    default: break;
+  }
+  return focusSnapshot();
+});
+ipcMain.on('settings:haptic-test', () => { if (haptics) haptics.play('pop'); });
+ipcMain.handle('settings:mic-request', () => requestMic());
+ipcMain.on('settings:open-mic-settings', openMicSettings);
+ipcMain.on('settings:open-automation-settings', () => {
+  shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Automation');
+});
+ipcMain.on('settings:reset-position', resetPosition);
+ipcMain.on('settings:show-orb', () => { if (win && !win.isVisible()) toggleVisible(); });
+ipcMain.on('settings:open-url', (_e, url) => {
+  const u = String(url || '');
+  if (/^https:\/\/(github\.com|libraries\.dev)\//.test(u)) shell.openExternal(u);
+});
+ipcMain.on('settings:close', () => { if (settingsWin) settingsWin.close(); });
 
 // ---------- 生命週期 ----------
 if (!app.requestSingleInstanceLock()) {
@@ -388,6 +698,9 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     globalShortcut.register(SHORTCUT, toggleVisible);
+    globalShortcut.register(FOCUS_SHORTCUT, toggleFocus);
+    // 第一次打開：跑一次設定精靈（權限、外觀、專注長度）
+    if (!state.onboarded) setTimeout(() => openSettings('setup'), 800);
 
     // 外接螢幕被拔掉時，小球不要消失在看不到的地方
     const rescue = () => {
@@ -400,6 +713,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    stopFocusTicker();
+    stopDriftWatch();
     if (haptics) haptics.stop();
   });
   app.on('window-all-closed', () => { /* 常駐程式：不因視窗關閉而結束，用選單「結束」 */ });
